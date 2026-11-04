@@ -1,0 +1,18 @@
+# Hasil eksekusi / Outputs
+outputs/
+
+# Data spasial
+data/
+
+# Dokumen referensi besar
+docs/paper-references/*.pdf
+
+# Python & Notebook caches
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+
+.DS_Store
