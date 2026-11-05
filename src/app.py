@@ -3,8 +3,7 @@
 Run with:
     /opt/miniconda3/envs/ee/bin/streamlit run src/app.py
 
-Requires streamlit and streamlit-folium in the ee environment:
-    /opt/miniconda3/envs/ee/bin/pip install streamlit streamlit-folium
+The ee environment is declared in environment.yml at the repository root.
 
 Design note: every widget change costs one or more Earth Engine round trips, so
 nothing is computed until the "Hitung" button is pressed, and the whole result
@@ -27,6 +26,7 @@ import calibrate_threshold as cal
 import config
 import indices
 import morphology
+import null_model
 import runs
 import sentinel
 
@@ -56,6 +56,12 @@ TOOLTIPS = {
         "sampai 0.60. Plateau adalah rentang ambang yang menghasilkan matrix identik, "
         "sehingga di dalamnya matrix tidak bisa memilih dan luas air dipakai sebagai "
         "penentu."
+    ),
+    "null": (
+        "Kontrol: pipeline yang sama dijalankan pada jendela-jendela yang tidak ada "
+        "banjir, dengan referensi dan ambang yang sama. Hasilnya adalah lantai - "
+        "berapa hektar 'air' yang tetap muncul saat tidak terjadi apa-apa. Angka "
+        "banjir hanya berarti kalau berada di atas sebaran ini."
     ),
     "morfologi": (
         "Uji pada gambar sintetis dengan jawaban yang sudah diketahui: satu kanal panjang, "
@@ -197,6 +203,7 @@ def compute(event_start, event_end, base_start, base_end, mode, mask_mode,
         "layers": layers, "thumb_url": thumb,
         "event_window": "%s..%s" % (event_start, event_end),
         "event_start": event_start, "event_end": event_end,
+        "base_start": base_start, "base_end": base_end,
         "base_window": base_window,
     }
 
@@ -463,6 +470,78 @@ def render_calibration(result):
     chart["air (ternormalisasi)"] = (scored.set_index("threshold")["water_ha"]
                                      / scored["water_ha"].max())
     st.line_chart(chart, height=220)
+
+    st.divider()
+    render_null_model(result)
+
+
+@st.cache_data(ttl=3600, show_spinner="Menghitung kontrol null-model...")
+def null_frame(base_start, base_end, threshold, mask_mode):
+    """Same pipeline on windows with no reported flood, using the same reference."""
+    rows, base_coverage = null_model.run("2025-03-01", "2025-11-30",
+                                         base_start, base_end, threshold,
+                                         mask_mode, min_coverage=0.9)
+    return pd.DataFrame(rows), base_coverage
+
+
+def render_null_model(result):
+    st.subheader("Kontrol null-model", help=TOOLTIPS["null"])
+    st.caption("Jendela 16 hari sepanjang Mar-Nov 2025 dijalankan dengan referensi "
+               "dan ambang yang sama. Tidak ada banjir yang dilaporkan pada rentang "
+               "itu, jadi apa pun yang muncul di sini adalah lantai metode, bukan "
+               "genangan.")
+
+    if st.button("Hitung lantai", key="null_run"):
+        st.session_state["null_result"] = null_frame(
+            result["base_start"], result["base_end"], result["threshold"],
+            result["mask_mode"])
+
+    stored = st.session_state.get("null_result")
+    if stored is None:
+        return
+
+    frame, base_coverage = stored
+    usable = frame[frame["water_ha"].notna()]
+    if usable.empty:
+        st.warning("Tidak ada jendela tenang yang cukup teramati. Cakupan referensi "
+                   "hanya %.0f%% AOI, jadi jendela yang lolos sangat sedikit."
+                   % (100 * base_coverage))
+        return
+
+    flood = result["raw_ha"]
+    median = usable["water_ha"].median()
+    worst = usable["water_ha"].max()
+    below = int((usable["water_ha"] < flood).sum())
+
+    columns = st.columns(3)
+    columns[0].metric("Median jendela tenang", "%.1f ha" % median)
+    columns[1].metric("Maksimum jendela tenang", "%.1f ha" % worst)
+    columns[2].metric("Jendela banjir", "%.1f ha" % flood,
+                      delta="%+.1f ha dari median" % (flood - median))
+    st.caption("%d dari %d jendela tenang berada di bawah angka banjir. Referensi "
+               "menutup %.0f%% AOI, jadi semua angka dihitung pada irisan yang sama."
+               % (below, len(usable), 100 * base_coverage))
+
+    if flood > worst:
+        st.success("Angka banjir berada di atas semua jendela tenang. Inilah bukti "
+                   "yang sebelumnya tidak ada: sinyalnya tidak bisa dijelaskan oleh "
+                   "variasi musiman saja.")
+    elif flood > median:
+        st.warning("Angka banjir di atas median jendela tenang tapi masih di dalam "
+                   "rentangnya. Sebagian dari angka itu bisa berasal dari perubahan "
+                   "fase tanam, bukan genangan. Bandingkan dengan maksimum, bukan "
+                   "dengan nol.")
+    else:
+        st.error("Angka banjir tidak lebih tinggi dari jendela tanpa banjir. Dengan "
+                 "referensi ini, metode belum bisa membedakan genangan dari perubahan "
+                 "fase tanam. Ganti referensi ke fase tanam yang sama sebelum angka "
+                 "ini dipakai.")
+
+    show = frame.rename(columns={"start": "Mulai", "end": "Selesai"})
+    show["Cakupan"] = 100 * show["coverage"]
+    show["Air (ha)"] = show["water_ha"]
+    st.dataframe(show[["Mulai", "Selesai", "Cakupan", "Air (ha)"]].round(1),
+                 hide_index=True, width="stretch", height=300)
 
 
 def render_morphology(result):

@@ -246,7 +246,62 @@ right and the picture was wrong. `save_thumb()` now pins the reprojection and ou
 
 ---
 
-## 7. Open issues
+## 7. Null-model control: the flood estimate is not distinguishable from the season
+
+Everything above compares a flood window to a reference window and reads the difference as
+inundation. That inference has an untested premise: that ordinary windows produce *less* of this
+difference. `src/null_model.py` tests it. It runs the identical chain - same masker, same
+reference (`pre_event_2025_02`, Nov–Dec 2024), same threshold 0.05 - on 17 consecutive 16-day
+windows from 2025-03-01 to 2025-11-30, a period with no reported flood, and reports what comes out.
+
+| Window | Coverage | Water (ha) |
+|---|---|---|
+| 2025-03-01 | 55 % | 16.4 |
+| 2025-04-18 | 55 % | 10.5 |
+| 2025-05-04 | 55 % | 19.3 |
+| 2025-05-20 | 55 % | 10.6 |
+| 2025-06-05 | 55 % | 14.5 |
+| 2025-06-21 | 55 % | 56.7 |
+| 2025-07-07 | 55 % | 64.4 |
+| 2025-07-23 | 55 % | 58.2 |
+| **2025-08-08** | **55 %** | **88.7** |
+| 2025-08-24 | 55 % | 41.3 |
+| 2025-09-09 | 55 % | 3.2 |
+| 2025-09-25 | 55 % | 1.4 |
+| 2025-10-11 | 52 % | 22.9 |
+| 2025-10-27 | 55 % | 2.5 |
+
+Median **17.9 ha**, maximum **88.7 ha**. The flood window reports **43.4 ha**, which is above the
+median but below the maximum: 10 of 14 quiet windows sit below it, four sit above.
+
+The 88.7 ha is not a bug. August is land preparation for the second planting season: bare and
+puddled soil has a higher MNDWI than the vegetated November–December reference, so the delta reads
+the tillage cycle as water. Any window that crosses a cropping-stage boundary does the same thing.
+With this reference, "43 ha of water" is a plausible ordinary value.
+
+Three consequences:
+
+1. **The 43 ha cannot be presented as flood extent.** It can be presented as a wetness anomaly
+   relative to Nov–Dec 2024, which is a weaker and honest claim. Section 5's confusion matrix still
+   holds - the four plots do separate at 0.05 - but separation at four points does not make the
+   spatial extent specific to flooding.
+2. **The comparison must be against the null distribution, not against zero.** Reporting "43 ha"
+   next to "0 ha in the reference" is what made the number look strong. Reporting it next to a
+   median of 17.9 ha and a maximum of 88.7 ha is what it actually is.
+3. **The fix is a same-stage reference, not a better threshold.** No threshold separates flood from
+   tillage here, because both raise MNDWI by the same mechanism. What separates them is the
+   reference window: compare February against a February, not against November.
+
+Two limits of this control, stated so it is not over-read:
+
+- The quiet windows all sit *after* the event, because January and the months before it are
+  unusable. A control drawn from the same season one year earlier would be stronger.
+- All windows share the 55 % reference footprint, so the comparison is like-for-like in area, but
+  it also means the control inherits whatever bias that footprint has.
+
+---
+
+## 8. Open issues
 
 1. **Two of three events remain unusable.** 2026-01-24 has 35 % coverage with one validation point
    inside the clear patch; 2026-01-29 has none.
@@ -254,20 +309,19 @@ right and the picture was wrong. `save_thumb()` now pins the reprojection and ou
 3. **The 43 ha water extent is still reference-dependent** (5.3, 6.4: 43.4 ha against
    Nov–Dec 2024, 49.3 ha against the 2024 dry season). A reference window matched to the same
    cropping stage would test this, but no such cloud-free window exists near the event.
-4. **`docs/AGENTS.md` embeds a full `conda list`**, roughly 360 of its 560 lines. It should be
-   replaced by an `environment.yml` pinning top-level dependencies only.
-5. **The literature PDFs are gitignored** (`docs/paper-references/*.pdf`, 67 MB), so a fresh clone
+4. **The literature PDFs are gitignored** (`docs/paper-references/*.pdf`, 67 MB), so a fresh clone
    gets no references.
-6. **No null-model control.** Nothing yet proves the 43 ha is larger than what the same pipeline
-   reports on two arbitrary cloud-free dates in a quiet month. Without it, a reviewer can argue
-   the whole signal is a compositing difference.
-7. **Only one of the five reference papers has been used.** Samela (2022) and Yi (2025) propose
+5. **The null model says the flood estimate is ordinary** (section 7). This is the largest open
+   problem in the project: the spatial extent cannot be defended until a same-stage reference
+   window exists. Options are a February reference from an earlier year, or a different data
+   source entirely.
+6. **Only one of the five reference papers has been used.** Samela (2022) and Yi (2025) propose
    hydrogeomorphic priors that need a DEM with real relief; this AOI has 5.4 m of total range, so
    their contribution is likely not transferable here.
 
 ---
 
-## 8. Reproduction
+## 9. Reproduction
 
 ```bash
 /opt/miniconda3/envs/ee/bin/python src/preview_event.py --diagnose
@@ -276,6 +330,7 @@ right and the picture was wrong. `save_thumb()` now pins the reprojection and ou
 /opt/miniconda3/envs/ee/bin/python src/calibrate_threshold.py --event 2025-02-17 --mode mndwi
 /opt/miniconda3/envs/ee/bin/python src/calibrate_threshold.py --event 2025-02-17 --mode delta
 /opt/miniconda3/envs/ee/bin/python src/evaluate_morphology.py
+/opt/miniconda3/envs/ee/bin/python src/null_model.py --flood-ha 43.4 --csv
 /opt/miniconda3/envs/ee/bin/python -m streamlit run src/app.py
 ```
 
