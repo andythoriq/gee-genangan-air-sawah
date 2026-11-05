@@ -90,13 +90,14 @@ def composite(start, end, mode=None, geom=None):
     return masked.median().clip(geom)
 
 
-def coverage(image, geom=None):
+def coverage(image, geom=None, band=None):
     """Fraction of AOI pixels carrying a valid observation, as an ee.Number.
 
     Call .getInfo() to read it. Values near 0 mean the window is unusable,
-    which is the normal state here during the wet season.
+    which is the normal state here during the wet season. Without a band name
+    the first band is used, which lets this work on single-band index images.
     """
-    valid = image.select(config.GREEN).mask().rename("valid")
+    valid = image.select(band if band is not None else 0).mask().rename("valid")
     return valid.reduceRegion(
         reducer=ee.Reducer.mean(),
         geometry=geom or aoi(),

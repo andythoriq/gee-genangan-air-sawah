@@ -108,3 +108,9 @@ VALIDATION_BUFFER_M = 30
 # It is NOT the calibrated threshold - that comes from the thresholding step
 # and must be justified against the validation points.
 PREVIEW_THRESHOLD = 0.0
+
+# Operating point from src/calibrate_threshold.py --mode delta on 2025-02-17.
+# Balanced accuracy 1.00 holds across a plateau of -0.32 .. 0.05; 0.05 is the
+# most conservative value on it, i.e. the smallest water extent that still
+# separates all validation points. Supported by one negative sample only.
+CALIBRATED_DELTA_THRESHOLD = 0.05
