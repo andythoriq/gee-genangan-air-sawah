@@ -92,8 +92,8 @@ def run(event, window, baseline_name, threshold):
     base_start, base_end = config.BASELINES[baseline_name]
     geom = sentinel.aoi()
 
-    event_composite = sentinel.composite(event_start, event_end, geom=geom)
-    base_composite = sentinel.composite(base_start, base_end, geom=geom)
+    event_composite = sentinel.composite(event_start, event_end, geom=geom, clip=False)
+    base_composite = sentinel.composite(base_start, base_end, geom=geom, clip=False)
     event_mndwi = indices.mndwi(event_composite)
     base_mndwi = indices.mndwi(base_composite)
 

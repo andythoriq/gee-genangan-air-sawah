@@ -20,10 +20,8 @@ def init():
 
 
 def aoi():
-    """Area of interest as a plain rectangle in WGS84."""
-    return ee.Geometry.Rectangle(
-        config.AOI_BOUNDS, proj="EPSG:4326", geodesic=False
-    )
+    """Area of interest as the survey polygon, in WGS84."""
+    return ee.Geometry.Polygon([config.AOI_RING])
 
 
 def mask_qa60(image):
@@ -59,8 +57,13 @@ def mask_clouds(image, mode=None):
         return mask_scl(image)
     if mode == "strict":
         return mask_scl(mask_qa60(image))
+    if mode == "none":
+        # Deliberately unmasked. Used only for the map preview when the masked
+        # composite has no usable pixels: the analyst still wants to see what
+        # the window actually looks like, clouds included.
+        return image
     raise ValueError(
-        "unknown CLOUD_MASK_MODE %r, expected 'scl', 'qa60' or 'strict'" % mode
+        "unknown CLOUD_MASK_MODE %r, expected 'scl', 'qa60', 'strict' or 'none'" % mode
     )
 
 
@@ -78,16 +81,61 @@ def collection(start, end, geom=None):
     )
 
 
-def composite(start, end, mode=None, geom=None):
-    """Median composite over [start, end), cloud-masked and clipped.
+def composite(start, end, mode=None, geom=None, clip=True):
+    """Median composite over [start, end), cloud-masked and optionally clipped.
 
     A median over an already-masked stack leaves a pixel masked only if every
     observation in the window is unusable, so gaps are honest rather than
     filled with cloud. Check coverage() before trusting the result.
+
+    Pass clip=False when the composite is only used for sampling validation
+    points: some of those points lie outside the AOI, and clipping would turn
+    them into missing data. Area statistics are unaffected because they are
+    bounded by the geometry passed to reduceRegion.
     """
     geom = geom or aoi()
-    masked = collection(start, end, geom).map(lambda img: mask_clouds(img, mode))
-    return masked.median().clip(geom)
+    scenes = collection(start, end, geom)
+    if scenes.size().getInfo() == 0:
+        # An empty collection produces an image with no bands, which fails much
+        # later with a confusing "No band named B3" message.
+        raise ValueError(
+            "Tidak ada citra Sentinel-2 pada %s sampai %s. Periksa urutan tanggal "
+            "dan pastikan rentangnya berada di dalam arsip (2015 sampai sekarang)."
+            % (start, end))
+    masked = scenes.map(lambda img: mask_clouds(img, mode))
+    median = masked.median()
+    return median.clip(geom) if clip else median
+
+
+def monthly_coverage(start, end, geom=None, mode=None):
+    """AOI coverage per calendar month, as an ee.FeatureCollection.
+
+    Built server-side in a single request so the caller can scan two years of
+    months without paying one round trip each. Use it to choose reference
+    windows from evidence instead of guessing.
+    """
+    geom = geom or aoi()
+    start_date = ee.Date(start)
+    end_date = ee.Date(end)
+    total = end_date.difference(start_date, "month").round()
+    months = ee.List.sequence(0, total.subtract(1)).map(
+        lambda offset: start_date.advance(offset, "month"))
+
+    def summarise(month):
+        month = ee.Date(month)
+        scenes = collection(month.format("YYYY-MM-dd"), month.advance(1, "month"), geom)
+        masked = scenes.map(lambda img: mask_clouds(img, mode))
+        valid = masked.median().select(0).mask()
+        share = valid.reduceRegion(
+            ee.Reducer.mean(), geom, 10, maxPixels=int(1e9), bestEffort=True
+        ).values().get(0)
+        return ee.Feature(None, {
+            "month": month.format("YYYY-MM"),
+            "coverage": share,
+            "scenes": scenes.size(),
+        })
+
+    return ee.FeatureCollection(months.map(summarise))
 
 
 def coverage(image, geom=None, band=None):

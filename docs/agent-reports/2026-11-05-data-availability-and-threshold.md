@@ -251,14 +251,17 @@ right and the picture was wrong. `save_thumb()` now pins the reprojection and ou
 1. **Two of three events remain unusable.** 2026-01-24 has 35 % coverage with one validation point
    inside the clear patch; 2026-01-29 has none.
 2. **The threshold is not statistically identified** — one negative sample, wide plateau (5.3).
-3. **The 130 ha water extent is probably inflated** by the transplanting-season reference (5.3, 6.4).
-   A reference window matched to the same cropping stage would test this, but no such cloud-free
-   window exists near the event.
+3. **The 43 ha water extent is still reference-dependent** (5.3, 6.4: 43.4 ha against
+   Nov–Dec 2024, 49.3 ha against the 2024 dry season). A reference window matched to the same
+   cropping stage would test this, but no such cloud-free window exists near the event.
 4. **`docs/AGENTS.md` embeds a full `conda list`**, roughly 360 of its 560 lines. It should be
    replaced by an `environment.yml` pinning top-level dependencies only.
 5. **The literature PDFs are gitignored** (`docs/paper-references/*.pdf`, 67 MB), so a fresh clone
    gets no references.
-6. **Only one of the five reference papers has been used.** Samela (2022) and Yi (2025) propose
+6. **No null-model control.** Nothing yet proves the 43 ha is larger than what the same pipeline
+   reports on two arbitrary cloud-free dates in a quiet month. Without it, a reviewer can argue
+   the whole signal is a compositing difference.
+7. **Only one of the five reference papers has been used.** Samela (2022) and Yi (2025) propose
    hydrogeomorphic priors that need a DEM with real relief; this AOI has 5.4 m of total range, so
    their contribution is likely not transferable here.
 
@@ -273,6 +276,7 @@ right and the picture was wrong. `save_thumb()` now pins the reprojection and ou
 /opt/miniconda3/envs/ee/bin/python src/calibrate_threshold.py --event 2025-02-17 --mode mndwi
 /opt/miniconda3/envs/ee/bin/python src/calibrate_threshold.py --event 2025-02-17 --mode delta
 /opt/miniconda3/envs/ee/bin/python src/evaluate_morphology.py
+/opt/miniconda3/envs/ee/bin/python -m streamlit run src/app.py
 ```
 
 Maps, sweeps and PNGs land in `outputs/`, which is gitignored; regenerate rather than commit.

@@ -28,7 +28,6 @@ import sentinel
 OUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "outputs")
 
 THRESHOLDS = [round(-0.60 + 0.01 * i, 2) for i in range(121)]
-AOI_HA = 550.62  # measured AOI area, used only for the human-readable readout
 
 
 def parse_args():
@@ -45,11 +44,12 @@ def parse_args():
 def build_layer(args):
     """Return the image to threshold, plus a label describing it."""
     geom = sentinel.aoi()
-    event_composite = sentinel.composite(*config.EVENTS[args.event][args.window], geom=geom)
+    event_composite = sentinel.composite(
+        *config.EVENTS[args.event][args.window], geom=geom, clip=False)
     if args.mode == "mndwi":
         return indices.mndwi(event_composite), "MNDWI"
     baseline = args.baseline or config.EVENTS[args.event]["baseline"]
-    base_composite = sentinel.composite(*config.BASELINES[baseline], geom=geom)
+    base_composite = sentinel.composite(*config.BASELINES[baseline], geom=geom, clip=False)
     return indices.mndwi(event_composite).subtract(indices.mndwi(base_composite)), "MNDWI delta"
 
 
@@ -88,6 +88,10 @@ def histogram(image, mode, geom):
         ee.Reducer.fixedHistogram(low, high, steps),
         geom, 10, maxPixels=int(1e9), bestEffort=True,
     ).get(band).getInfo()
+    if not hist:
+        # Fully masked window: reduceRegion returns null rather than an empty
+        # histogram. Callers treat an empty list as "no water anywhere".
+        return []
     return [(bucket[0] + width / 2, bucket[1]) for bucket in hist]
 
 
@@ -151,6 +155,9 @@ def main():
     # water_fraction() is relative to observed pixels, which is not the AOI when
     # the layer is partly cloud-masked. Scale it so the printed extent is honest.
     observed = (sentinel.coverage(image).getInfo() or 0)
+    aoi_ha = ee.Image.pixelArea().reduceRegion(
+        ee.Reducer.sum(), geom, 10, maxPixels=int(1e9), bestEffort=True
+    ).get("area").getInfo() / 10000.0
     scored = [(t, score(usable, t), water_fraction(hist, t) * observed)
               for t in THRESHOLDS]
 
@@ -176,7 +183,7 @@ def main():
         metrics = score(usable, threshold)
         fraction = water_fraction(hist, threshold) * observed
         print("  thr %6.2f  water %5.1f%% (%.0f ha)  TP%d FN%d FP%d TN%d"
-              % (threshold, 100 * fraction, fraction * AOI_HA,
+              % (threshold, 100 * fraction, fraction * aoi_ha,
                  metrics["tp"], metrics["fn"], metrics["fp"], metrics["tn"]))
 
     out = os.path.join(OUT_DIR, "threshold_%s_%s_%s.csv"
