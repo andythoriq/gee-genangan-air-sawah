@@ -107,6 +107,30 @@ def composite(start, end, mode=None, geom=None, clip=True):
     return median.clip(geom) if clip else median
 
 
+def composite_index(start, end, index, mode=None, geom=None, clip=True):
+    """Median of a per-scene index, instead of an index of the median scene.
+
+    The two orders are not equivalent. Index-of-median applies the index once
+    to a stack of medians, so a pixel where half the scenes are cloudy still
+    contributes its median reflectance. Median-of-index scores each scene
+    first and then takes the median score, which is more robust where scenes
+    disagree but costs one index evaluation per scene.
+
+    'index' is a callable taking an ee.Image and returning a named band image,
+    e.g. indices.mndwi.
+    """
+    geom = geom or aoi()
+    scenes = collection(start, end, geom)
+    if scenes.size().getInfo() == 0:
+        raise ValueError(
+            "Tidak ada citra Sentinel-2 pada %s sampai %s. Periksa urutan tanggal "
+            "dan pastikan rentangnya berada di dalam arsip (2015 sampai sekarang)."
+            % (start, end))
+    indexed = scenes.map(lambda img: index(mask_clouds(img, mode)))
+    median = indexed.median()
+    return median.clip(geom) if clip else median
+
+
 def monthly_coverage(start, end, geom=None, mode=None):
     """AOI coverage per calendar month, as an ee.FeatureCollection.
 

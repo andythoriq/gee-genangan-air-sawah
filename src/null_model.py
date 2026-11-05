@@ -66,8 +66,21 @@ def measure(layer, threshold, geom):
     return coverage, hectares
 
 
+def index_image(start, end, order="index-of-median", mask_mode=None, geom=None):
+    """MNDWI for one window, composited in the requested order.
+
+    index-of-median: median the reflectance, then index it (the default).
+    median-of-index: index each scene, then median the scores.
+    """
+    if order == "median-of-index":
+        return sentinel.composite_index(start, end, indices.mndwi, mode=mask_mode,
+                                        geom=geom, clip=False)
+    composite = sentinel.composite(start, end, mode=mask_mode, geom=geom, clip=False)
+    return indices.mndwi(composite)
+
+
 def run(start, end, base_start, base_end, threshold=0.05, mask_mode=None,
-        days=16, step=16, min_coverage=0.9):
+        days=16, step=16, min_coverage=0.9, order="index-of-median"):
     """Measure every window in [start, end) against the same reference.
 
     Returns one row per window. Windows below 'min_coverage' keep their
@@ -75,8 +88,8 @@ def run(start, end, base_start, base_end, threshold=0.05, mask_mode=None,
     higher number than a fully observed one, so it cannot enter the floor.
     """
     geom = sentinel.aoi()
-    base = sentinel.composite(base_start, base_end, mode=mask_mode, geom=geom, clip=False)
-    base_mndwi = indices.mndwi(base)
+    base = index_image(base_start, base_end, order, mask_mode, geom)
+    base_mndwi = base
     # The delta mask is the intersection of both windows, so its coverage can
     # never exceed the reference footprint. Gating on an absolute 90% would
     # reject every window whenever the reference itself covers only half the
@@ -86,9 +99,8 @@ def run(start, end, base_start, base_end, threshold=0.05, mask_mode=None,
 
     rows = []
     for window_start, window_end in windows(start, end, days, step):
-        composite = sentinel.composite(window_start, window_end, mode=mask_mode,
-                                       geom=geom, clip=False)
-        layer = indices.mndwi(composite).subtract(base_mndwi)
+        layer = index_image(window_start, window_end, order, mask_mode,
+                            geom).subtract(base_mndwi)
         coverage, hectares = measure(layer, threshold, geom)
         rows.append({
             "start": window_start,
@@ -116,6 +128,15 @@ def summary(rows, flood_ha=None):
     }
 
 
+def measure_window(start, end, base_start, base_end, threshold=0.05,
+                  mask_mode=None, order="index-of-median"):
+    """Coverage and water area for one window, against the same reference."""
+    geom = sentinel.aoi()
+    base = index_image(base_start, base_end, order, mask_mode, geom)
+    layer = index_image(start, end, order, mask_mode, geom).subtract(base)
+    return measure(layer, threshold, geom)
+
+
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--start", default="2025-03-01", help="first quiet window start")
@@ -130,6 +151,11 @@ def parse_args():
                    default=config.CLOUD_MASK_MODE)
     p.add_argument("--min-coverage", type=float, default=0.9,
                    help="windows below this are excluded from the floor")
+    p.add_argument("--order", choices=("index-of-median", "median-of-index"),
+                   default="index-of-median",
+                   help="whether the index is applied before or after compositing")
+    p.add_argument("--flood-start", help="flood window start, measured in the same order")
+    p.add_argument("--flood-end", help="flood window end")
     p.add_argument("--flood-ha", type=float,
                    help="flood estimate to compare against, e.g. 43.4")
     p.add_argument("--csv", action="store_true", help="also write outputs/null_model.csv")
@@ -143,11 +169,16 @@ def main():
     base_start, base_end = config.BASELINES[args.baseline]
     rows, base_coverage = run(args.start, args.end, base_start, base_end,
                               args.threshold, args.mask, args.days, args.step,
-                              args.min_coverage)
-    stats = summary(rows, args.flood_ha)
+                              args.min_coverage, args.order)
+    flood_ha = args.flood_ha
+    if args.flood_start and args.flood_end:
+        _, flood_ha = measure_window(args.flood_start, args.flood_end,
+                                     base_start, base_end, args.threshold,
+                                     args.mask, args.order)
+    stats = summary(rows, flood_ha)
 
-    print("Kontrol null-model: delta MNDWI vs %s, ambang %.2f, masker %s"
-          % (args.baseline, args.threshold, args.mask))
+    print("Kontrol null-model: delta MNDWI vs %s, ambang %.2f, masker %s, urutan %s"
+          % (args.baseline, args.threshold, args.mask, args.order))
     print("%s..%s, jendela %d hari, langkah %d hari" 
           % (args.start, args.end, args.days, args.step))
     print("Referensi menutup %.0f%% AOI, jadi ambang kelayakan %.0f%% irisan\n"
@@ -163,9 +194,9 @@ def main():
     if stats["count"]:
         print("Lantai: median %.1f ha, maksimum %.1f ha"
               % (stats["median"], stats["max"]))
-    if args.flood_ha is not None and stats["count"]:
+    if flood_ha is not None and stats["count"]:
         print("\nJendela banjir: %.1f ha - lebih tinggi dari %d/%d jendela tenang."
-              % (args.flood_ha, stats["exceeded"], stats["count"]))
+              % (flood_ha, stats["exceeded"], stats["count"]))
 
     if args.csv:
         os.makedirs(OUT_DIR, exist_ok=True)

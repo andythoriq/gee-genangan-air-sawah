@@ -75,14 +75,14 @@ CLOUD_MASK_MODE = "scl"
 # Measured AOI coverage with CLOUD_MASK_MODE = "scl" (2026-11-05):
 #   name                window                     coverage
 #   dry_season_2024     2024-06-01..2024-08-31         100%
-#   pre_event_2025_02   2024-11-01..2024-12-31          68%
+#   pre_event_2025_02   2024-11-01..2024-12-31          55%
 #   pre_event_2026_01   2025-12-15..2026-01-15         100%
 # January 2025 itself has 0% coverage, so the nearest usable pre-event window
 # for the 2025-02-17 flood is Nov-Dec 2024, not the preceding month.
 #
 # Baseline choice is not cosmetic. Measured on the 2025-02-17 event, comparing
 # against dry_season_2024 (June-August, the dry-season cropping period) reports
-# 277 ha "receded" and makes all three inundated plots read drier than the
+# 67 ha "receded" and makes all three inundated plots read drier than the
 # baseline - the seasonal cropping cycle dominates the flood signal. Comparing
 # against pre_event_2025_02 keeps that confound small enough for the validation
 # points to separate correctly. Prefer a pre-event window over a dry-season one.

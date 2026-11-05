@@ -152,6 +152,12 @@ def compute(event_start, event_end, base_start, base_end, mode, mask_mode,
     hist = cal.histogram(layer, mode, geom)
     total_ha = area_ha()
 
+    # Label-free second opinion on where the distribution splits. Reported for
+    # comparison only; the analysis keeps using the calibrated threshold.
+    otsu_threshold = cal.otsu(hist)
+    otsu_share = (cal.water_fraction(hist, otsu_threshold) * observed
+                  if otsu_threshold is not None else None)
+
     # Recorded per point so the table can show that Sawah Impres sits outside
     # the polygon even though it is still sampled.
     for point in points:
@@ -198,6 +204,14 @@ def compute(event_start, event_end, base_start, base_end, mode, mask_mode,
         "observed": observed, "total_ha": total_ha,
         "event_coverage": event_coverage, "base_coverage": base_coverage,
         "points": points, "sweep": sweep,
+        "otsu": None if otsu_threshold is None else {
+            "threshold": otsu_threshold,
+            "water_pct": 100 * otsu_share,
+            "water_ha": otsu_share * total_ha,
+            # Share of the observed intersection, which is what Otsu actually
+            # splits. The AOI figure is smaller because clouds are excluded.
+            "observed_pct": 100 * otsu_share / observed if observed else None,
+        },
         "raw_ha": area_ha(water),
         "clean_ha": area_ha(cleaned) if cleaned is not None else None,
         "layers": layers, "thumb_url": thumb,
@@ -457,6 +471,25 @@ def render_calibration(result):
             "Ambang di dalam plateau bersifat sembarang. Dengan satu titik kontrol, "
             "matrix ini tidak membuktikan ambangnya benar, hanya membuktikan ambangnya "
             "tidak salah pada satu sawah. Jangan memilih ambang dari tabel ini saja.")
+
+    otsu = result.get("otsu")
+    if otsu:
+        gap = abs(otsu["threshold"] - result["threshold"])
+        if gap <= 0.02:
+            verdict = ("Otsu tidak memakai titik lapangan sama sekali, dan hasilnya "
+                       "berdekatan dengan %.2f - jadi pilihan ambang tidak "
+                       "bergantung pada satu metode." % result["threshold"])
+        else:
+            verdict = ("Selisihnya %.2f dari ambang yang dipakai, jadi keduanya "
+                       "tidak saling mendukung dan selisih itu perlu dijelaskan, "
+                       "bukan diabaikan." % gap)
+        st.caption(
+            "Pembanding Otsu pada histogram yang sama: ambang **%.3f**, air %.1f ha "
+            "(%.0f%% AOI, %.0f%% dari irisan teramati). %s Angka ini tidak dipakai "
+            "untuk analisis: pada jendela tanpa banjir Otsu tetap membagi 45-65%% "
+            "area teramati sebagai air."
+            % (otsu["threshold"], otsu["water_ha"], otsu["water_pct"],
+               otsu["observed_pct"], verdict))
 
     st.subheader("Sapuan ambang", help=TOOLTIPS["kalibrasi"])
     show = scored.copy()

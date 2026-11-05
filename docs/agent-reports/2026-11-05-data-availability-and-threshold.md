@@ -49,6 +49,11 @@ Measured AOI coverage after per-pixel masking:
 | 2026-01-24 | 0 % | 35 % | 2026-02-02 (9 days after, partial) |
 | 2026-01-29 | 0 % | 0 % | 2026-02-02 (4 days after, partial) |
 
+Per-scene measurement over all 345 acquisitions in 2025 confirms the mechanism: 61 % of scenes cover
+less than 1 % of the AOI, 15 % cover 1–90 %, 23 % cover more than 90 %, median 0.00. At scene level the
+distribution is bimodal — a single cloud cell closes the whole AOI, a single clear acquisition opens
+it — which is why a monthly or windowed average hides how all-or-nothing the data really is.
+
 **No t1 window contains a single clear pixel.** There is no observation of peak inundation for any
 reported event. The t1-versus-t2 comparison described in `docs/AGENTS.md` cannot be executed as
 written, and the two January 2026 events collapse onto the same acquisition.
@@ -77,11 +82,11 @@ Same event, same threshold, two different reference windows:
 
 | Reference window | persistent | new | receded | Validation points |
 |---|---|---|---|---|
-| `pre_event_2025_02` (Nov–Dec 2024) | 13.9 ha | 47.6 ha | 48.4 ha | directionally correct |
-| `dry_season_2024` (Jun–Aug 2024) | 57.5 ha | 22.7 ha | 277.0 ha | all inundated plots read *drier* |
+| `pre_event_2025_02` (Nov–Dec 2024) | 5.6 ha | 13.9 ha | 15.5 ha | directionally correct |
+| `dry_season_2024` (Jun–Aug 2024) | 19.0 ha | 18.2 ha | 67.0 ha | all inundated plots read *drier* |
 
 The dry-season window is the dry-season cropping period, when the paddies are themselves irrigated.
-277 ha of a 550 ha AOI flips to "receded", and every inundated plot is classified as drier than the
+67 ha of a 172 ha AOI flips to "receded", and every inundated plot is classified as drier than the
 reference — the seasonal cropping cycle swamps the flood signal.
 
 `pre_event_2025_02` is the defensible choice. January 2025 itself has 0 % coverage, so the nearest
@@ -153,13 +158,41 @@ One negative example. Sawah Impres is the only "safe" plot, and Sawah PU & Kepra
 observation at all. A matrix with `TN = 1` cannot distinguish a working threshold from a lucky one;
 it only rules out the threshold being badly wrong on that one field.
 
-Additionally, 130 ha is 24 % of the AOI. Since the reference window is the transplanting season, an
+Additionally, 43 ha is 25 % of the AOI. Since the reference window is the transplanting season, an
 unquantified share of that area is cropping stage rather than flood. This is the same confound that
-made the dry-season reference fail, just smaller.
+made the dry-season reference fail, just smaller; section 7 puts a number on it.
 
 Recommended framing: present the absolute threshold as the naive baseline that fails, the change
 threshold as the working method, and state plainly that the operating point sits on a plateau
 supported by a single negative sample.
+
+### 5.4 Otsu as a second opinion
+
+The weakest part of section 5 is that 0.05 is chosen from four plots. Otsu's method removes the
+labels from that decision: it takes the same delta histogram and picks the split that maximises
+between-class variance. `calibrate_threshold.otsu()` implements it on the 400-bin histogram already
+computed for the sweep, and the app reports it under the confusion matrix.
+
+On the flood window it returns **0.045**, which at 46 % of the observed intersection is **43.4 ha** —
+the same operating point, reached without looking at a single field observation. That is the
+strongest available answer to "why 0.05": two independent routes agree.
+
+It is not, however, a detector. Run on windows with no flood:
+
+| Window | Otsu threshold | Above it |
+|---|---|---|
+| Flood 2025-02-22 | +0.045 | 46 % |
+| Quiet 2025-08-08 | +0.525 | 51 % |
+| Quiet 2025-07-07 | +0.265 | 45 % |
+| Quiet 2025-09-25 | −0.355 | 65 % |
+
+The threshold moves wildly and the share stays between 45 % and 65 %. That is what maximising
+between-class variance does to a unimodal distribution: it always splits the bulk near the middle, so
+its output looks equally confident whether or not anything happened. The delta histogram here is
+unimodal (mode at −0.015, long positive tail), so Otsu's two-class assumption does not hold.
+
+Use it as corroboration of the operating point, never as a source of extent, and never to pick a
+threshold in another window.
 
 ---
 
@@ -178,7 +211,7 @@ bund is a field-length segment, roughly 10–20 pixels. A river runs continuousl
 ### 6.2 Method
 
 `src/morphology.py` approximates a path opening (Heijmans, Buckley & Talbot 2005) by the union of
-straight-line openings over 16 orientations at 11.25° steps. A one-pixel structuring element cannot
+straight-line openings over 17 orientations at 11° steps. A one-pixel structuring element cannot
 follow a meander, so the mask is dilated by one pixel first: at three pixels wide the element fits
 around a bend, and the dilation is undone afterwards. This single change raises channel retention
 from 35 % to 100 % at the same rejection rate.
@@ -298,6 +331,70 @@ Two limits of this control, stated so it is not over-read:
   unusable. A control drawn from the same season one year earlier would be stronger.
 - All windows share the 55 % reference footprint, so the comparison is like-for-like in area, but
   it also means the control inherits whatever bias that footprint has.
+
+### 7.1 Compositing order does not explain it
+
+Section 7 leaves three possible causes for the 88 ha: the reference window, the threshold, or the way
+the composite is built. The threshold is already ruled out (section 7, consequence 3: flood and
+tillage raise MNDWI by the same mechanism, so no threshold separates them). This section rules out the
+third.
+
+The question is *when* the index is computed. The default pipeline medians the reflectance and then
+indexes the median (index-of-median). The alternative indexes each scene first and then medians the
+scores (median-of-index), which is more robust where scenes disagree — the order used by script 1 of
+the original GEE notebook, and the one a reviewer is most likely to ask about.
+`sentinel.composite_index()` implements it and `null_model.py --order` runs the whole scan either way,
+measuring the flood window in the same order rather than comparing against a number produced by the
+other one.
+
+Both runs use the same 17 windows, the same reference (`pre_event_2025_02`), the same masker, the
+same threshold, and the same 55 % reference footprint, so the rows are paired:
+
+| Window | index-of-median | median-of-index | Δ |
+|---|---|---|---|
+| 2025-03-01 | 16.4 | 13.4 | −3.0 |
+| 2025-04-18 | 10.5 | 6.9 | −3.6 |
+| 2025-05-04 | 19.3 | 17.5 | −1.8 |
+| 2025-05-20 | 10.6 | 13.2 | +2.6 |
+| 2025-06-05 | 14.5 | 13.9 | −0.6 |
+| 2025-06-21 | 56.7 | 56.6 | −0.1 |
+| 2025-07-07 | 64.4 | 63.7 | −0.7 |
+| 2025-07-23 | 58.2 | 59.4 | +1.2 |
+| 2025-08-08 | 88.7 | 87.9 | −0.8 |
+| 2025-08-24 | 41.3 | 41.2 | −0.1 |
+| 2025-09-09 | 3.2 | 3.5 | +0.3 |
+| 2025-09-25 | 1.4 | 2.0 | +0.6 |
+| 2025-10-11 | 22.9 | 19.9 | −3.0 |
+| 2025-10-27 | 2.5 | 2.5 | 0.0 |
+| **Median** | **17.9** | **15.7** | **−2.2** |
+| **Maximum** | **88.7** | **87.9** | **−0.8** |
+| **Flood window 2025-02-22..03-04** | **43.4** | **43.7** | **+0.3** |
+| **Quiet windows below the flood** | **10 / 14** | **10 / 14** | **—** |
+
+Mean absolute change per window: **1.3 ha**. The largest is 3.6 ha, on a window that reports about
+10 ha.
+Every window above 50 ha — the ones that make the null distribution look alarming — moves by at most
+1.2 ha. The order lowers the floor by 2.2 ha (12 %) and leaves the conclusion exactly where it was:
+the flood value sits inside the quiet distribution either way, at the same rank.
+
+That is the useful part of the result. It removes a methodological objection without changing the
+finding. The seasonal signal is in the data, not in the order of operations, which leaves the
+reference window as the only remaining cause.
+
+What this does **not** show: that index-of-median is wrong. Median-of-index is still the more robust
+choice at cloud edges, and nothing here measures that. The two orders agree so closely here because
+the observed footprint is clear in nearly every scene of these windows; where scenes disagree, the
+orders would diverge more. The test rules
+the order out as the cause of the null-model result; it does not rank the two implementations.
+
+Reproduce:
+
+```bash
+/opt/miniconda3/envs/ee/bin/python src/null_model.py --order index-of-median \
+    --flood-start 2025-02-22 --flood-end 2025-03-04
+/opt/miniconda3/envs/ee/bin/python src/null_model.py --order median-of-index \
+    --flood-start 2025-02-22 --flood-end 2025-03-04
+```
 
 ---
 

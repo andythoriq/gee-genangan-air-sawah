@@ -21,7 +21,7 @@ import math
 
 import ee
 
-# 16 orientations at 11.25 degrees, so a channel is never more than 5.6 degrees
+# 17 orientations at 11 degrees, so a channel is never more than 5.5 degrees
 # away from an aligned element.
 DEFAULT_ANGLES = tuple(float(angle) for angle in range(0, 180, 11))
 

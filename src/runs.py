@@ -84,6 +84,9 @@ def _summary(result, note, saved_at):
             "-" if row["balanced"] is None else "%.2f" % row["balanced"]),
         "Luas air pada ambang ini: %.1f ha (%.0f%% AOI)" % (
             row["water_ha"], row["water_pct"]),
+        "Ambang Otsu (pembanding): %s" % (
+            "-" if not result.get("otsu") else "%.3f (%.1f ha)" % (
+                result["otsu"]["threshold"], result["otsu"]["water_ha"])),
         "",
         "> Ambang di dalam plateau bersifat sembarang. Dengan satu titik kontrol, "
         "matrix ini tidak membuktikan ambangnya benar.",

@@ -102,6 +102,39 @@ def water_fraction(hist, threshold):
     return sum(count for centre, count in hist if centre > threshold) / total
 
 
+def otsu(hist):
+    """Threshold that maximises between-class variance, from a histogram alone.
+
+    No labels involved, which is the point: it is a second opinion on where the
+    distribution separates, independent of the field points.
+
+    Read it as a corroboration, not a detector. Otsu assumes two classes, and
+    the delta histogram here is unimodal with a long positive tail, so the
+    algorithm will split whatever it is given: on quiet windows it still puts
+    45-65 % of the observed area above its threshold. It cannot tell a flood
+    from a cropping-stage change, so never report an extent derived from it.
+    """
+    total = sum(count for _, count in hist)
+    if not total:
+        return None
+    weighted = sum(centre * count for centre, count in hist)
+    low_count = 0.0
+    low_sum = 0.0
+    best = (-1.0, None)
+    for index in range(len(hist) - 1):
+        centre, count = hist[index]
+        low_count += count
+        low_sum += centre * count
+        high_count = total - low_count
+        if low_count <= 0 or high_count <= 0:
+            continue
+        between = (low_count * high_count
+                   * (low_sum / low_count - (weighted - low_sum) / high_count) ** 2)
+        if between > best[0]:
+            best = (between, hist[index + 1][0])
+    return best[1]
+
+
 def score(points, threshold):
     """Confusion counts and derived rates for one threshold."""
     tp = fn = fp = tn = 0
@@ -185,6 +218,14 @@ def main():
         print("  thr %6.2f  water %5.1f%% (%.0f ha)  TP%d FN%d FP%d TN%d"
               % (threshold, 100 * fraction, fraction * aoi_ha,
                  metrics["tp"], metrics["fn"], metrics["fp"], metrics["tn"]))
+
+    reference = otsu(hist)
+    if reference is not None:
+        fraction = water_fraction(hist, reference) * observed
+        print()
+        print("  Otsu (pembanding, tanpa label): thr %6.3f  water %5.1f%% (%.0f ha)"
+              % (reference, 100 * fraction, fraction * aoi_ha))
+        print("  Otsu tidak dipakai untuk analisis - lihat docstring otsu().")
 
     out = os.path.join(OUT_DIR, "threshold_%s_%s_%s.csv"
                        % (args.mode, args.event, args.window))
