@@ -50,7 +50,16 @@ TOOLTIPS = {
     "peta": (
         "Ikon di kanan atas peta dipakai untuk berpindah antara basemap jalan dan citra "
         "satelit Esri, serta menyalakan/mematikan layer hasil analisis. Titik kuning "
-        "adalah sawah validasi; Sawah Impres berada di luar poligon AOI."
+        "adalah sawah validasi; Sawah Impres berada di luar poligon AOI. Toggle "
+        "Bandingkan dengan citra mentah menampilkan citra mentah dan hasil olahan "
+        "berdampingan."
+    ),
+    "banding": (
+        "Menampilkan citra mentah dan hasil olahan berdampingan. Citra mentah adalah "
+        "median tanpa masker, jadi awan tetap ada dan tampak putih; layer merah "
+        "menandai piksel yang dibuang masker. Perhatikan bahwa piksel berawan bukan "
+        "piksel kering - nilainya tidak dihitung sama sekali, jadi sawah yang tertutup "
+        "awan tidak bisa disebut aman maupun tergenang."
     ),
     "kalibrasi": (
         "Confusion matrix membandingkan prediksi dengan kenyataan lapangan: TP tergenang "
@@ -122,6 +131,30 @@ def raw_preview(start, end):
     image = sentinel.composite(start, end, mode="none", clip=True)
     vis = {"bands": [config.RED, config.GREEN, "B2"], "min": 0, "max": 3000}
     return tile_url(image, vis)
+
+
+@st.cache_data(ttl=3600, show_spinner="Menyiapkan layer awan...")
+def cloud_preview(start, end):
+    """How often each pixel is clouded across the window, as a red overlay.
+
+    Fraction of scenes whose cloud mask rejects the pixel. The raw composite
+    is a median over unmasked reflectance, so a pixel that is cloudy in two of
+    five scenes still contributes haze to it; this layer shows where.
+
+    Deliberately not "pixels the composite threw away": over a window with
+    100% coverage that set is empty, which would draw nothing exactly when the
+    image is haziest.
+    """
+    scenes = sentinel.collection(start, end)
+
+    def cloudy(image):
+        # The mask is multiband; every band shares it, so one band is enough.
+        return sentinel.mask_clouds(image).mask().Not().select(0).rename("cloud")
+
+    share = scenes.map(cloudy).mean().clip(sentinel.aoi())
+    return tile_url(share.updateMask(share.gt(0)),
+                    {"min": 0, "max": 1,
+                     "palette": ["ffe066", "ff922b", "c92a2a"]})
 
 
 def compute(event_start, event_end, base_start, base_end, mode, mask_mode,
@@ -395,12 +428,13 @@ def render_status(result):
     return result["observed"] >= 0.05
 
 
-def render_map(result, ok):
-    st.subheader("Peta", help=TOOLTIPS["peta"])
+def build_map(result, ok, mode="processed"):
+    """Folium map for one view: "processed" or "raw"."""
     lats = [p[1] for p in config.AOI_RING]
     lons = [p[0] for p in config.AOI_RING]
     fmap = folium.Map(location=[(min(lats) + max(lats)) / 2, (min(lons) + max(lons)) / 2],
                       zoom_start=15, tiles=None, control_scale=True)
+
     def osm():
         return folium.TileLayer("OpenStreetMap", name="Jalan (OSM)")
 
@@ -411,12 +445,27 @@ def render_map(result, ok):
             attr="Esri, Maxar, Earthstar Geographics",
             name="Satelit (Esri)", overlay=False, control=True)
 
-    # Folium shows the first base layer added. When the window has no usable
-    # pixels the satellite basemap is the only thing that can orient the
-    # reader, so it goes first.
-    for make in ([esri, osm] if not ok else [osm, esri]):
+    # Folium shows the first base layer added. Satellite goes first whenever
+    # the map is about what the sensor saw, or when the analysed layers are
+    # blank and only the basemap can orient the reader.
+    for make in ([esri, osm] if (mode == "raw" or not ok) else [osm, esri]):
         make().add_to(fmap)
-    if ok:
+
+    if mode == "raw":
+        try:
+            folium.raster_layers.TileLayer(
+                tiles=raw_preview(result["event_start"], result["event_end"]),
+                attr="Google Earth Engine", name="Sentinel-2 mentah",
+                overlay=True, control=True, show=True).add_to(fmap)
+            folium.raster_layers.TileLayer(
+                tiles=cloud_preview(result["event_start"], result["event_end"]),
+                attr="Google Earth Engine", name="Awan (frekuensi)",
+                overlay=True, control=True, show=True, opacity=0.65).add_to(fmap)
+        except Exception:
+            # The AOI and the points are the point of this view; a failed
+            # preview must not take them down with it.
+            pass
+    elif ok:
         for name, url in result["layers"].items():
             folium.raster_layers.TileLayer(tiles=url, attr="Google Earth Engine",
                                            name=name, overlay=True,
@@ -428,21 +477,45 @@ def render_map(result, ok):
         try:
             preview = raw_preview(result["event_start"], result["event_end"])
         except Exception:
-            # The basemap, AOI and points are the point of this branch; a
-            # failed preview must not take them down with it.
             preview = None
         if preview:
             folium.raster_layers.TileLayer(
                 tiles=preview, attr="Google Earth Engine",
                 name="Citra mentah (tanpa masker)",
                 overlay=True, control=True, show=False).add_to(fmap)
+
     folium.Polygon([(p[1], p[0]) for p in config.AOI_RING],
                    color="red", weight=2, fill=False, name="AOI").add_to(fmap)
     for name, spec in config.VALIDATION_POINTS.items():
         folium.CircleMarker([spec["lonlat"][1], spec["lonlat"][0]], radius=5,
                             color="yellow", fill=True, tooltip=name).add_to(fmap)
     folium.LayerControl().add_to(fmap)
-    st_folium(fmap, height=560, use_container_width=True)
+    return fmap
+
+
+def render_map(result, ok):
+    st.subheader("Peta", help=TOOLTIPS["peta"])
+    compare = st.toggle("Bandingkan dengan citra mentah", value=not ok,
+                        help=TOOLTIPS["banding"])
+
+    if compare:
+        left, right = st.columns(2)
+        with left:
+            st.caption("**Citra mentah** — median tanpa masker, awan masih ada.")
+            st_folium(build_map(result, ok, "raw"), height=470,
+                      use_container_width=True, key="peta_mentah")
+        with right:
+            st.caption("**Hasil olahan** — setelah masker awan, %s."
+                       % result["layer_label"])
+            st_folium(build_map(result, ok, "processed"), height=470,
+                      use_container_width=True, key="peta_olahan")
+        st.caption("Merah = seberapa sering piksel itu tertutup awan di jendela ini; "
+                   "makin pekat, makin sering. Piksel yang masih berawan di median "
+                   "bukan berarti sawahnya kering.")
+    else:
+        st_folium(build_map(result, ok, "processed"), height=560,
+                  use_container_width=True, key="peta")
+
     st.caption("Titik kuning = validasi lapangan. Sawah Impres berada di luar poligon AOI.")
     if not ok:
         st.warning(
