@@ -53,12 +53,18 @@ def build_layer(args):
     return indices.mndwi(event_composite).subtract(indices.mndwi(base_composite)), "MNDWI delta"
 
 
-def sample_points(image):
-    """Mean value at each validation plot, or None where the plot is clouded."""
+def sample_points(image, event=None):
+    """Mean value at each validation plot, or None where the plot is clouded.
+
+    The label is resolved in Python from config.label_for(name, event), not
+    carried through Earth Engine: a Feature property cannot hold None, and a
+    point with no ground truth for this event must stay distinguishable from a
+    point labelled "safe".
+    """
     features = [
         ee.Feature(
             ee.Geometry.Point(spec["lonlat"]).buffer(config.VALIDATION_BUFFER_M),
-            {"name": name, "expected": spec["expected"]},
+            {"name": name},
         )
         for name, spec in config.VALIDATION_POINTS.items()
     ]
@@ -67,7 +73,7 @@ def sample_points(image):
     ).getInfo()["features"]
     return [
         {"name": f["properties"]["name"],
-         "expected": f["properties"]["expected"],
+         "expected": config.label_for(f["properties"]["name"], event),
          "value": f["properties"].get("mean")}
         for f in sampled
     ]
@@ -135,19 +141,33 @@ def otsu(hist):
     return best[1]
 
 
+def cell(point, threshold):
+    """Which confusion-matrix cell one point falls into, or None.
+
+    None means the point cannot be scored: either the window has no clear
+    pixel there, or no ground truth was recorded for this event.
+    """
+    if point["value"] is None or point["expected"] is None:
+        return None
+    wet = point["value"] > threshold
+    if point["expected"] == "inundated":
+        return "TP" if wet else "FN"
+    return "FP" if wet else "TN"
+
+
 def score(points, threshold):
     """Confusion counts and derived rates for one threshold."""
     tp = fn = fp = tn = 0
     for point in points:
-        if point["value"] is None:
-            continue
-        wet = point["value"] > threshold
-        if point["expected"] == "inundated":
-            tp += wet
-            fn += not wet
-        else:
-            fp += wet
-            tn += not wet
+        which = cell(point, threshold)
+        if which == "TP":
+            tp += 1
+        elif which == "FN":
+            fn += 1
+        elif which == "FP":
+            fp += 1
+        elif which == "TN":
+            tn += 1
     recall = tp / (tp + fn) if (tp + fn) else None
     specificity = tn / (tn + fp) if (tn + fp) else None
     balanced = None
@@ -167,23 +187,28 @@ def main():
 
     image, label = build_layer(args)
     geom = sentinel.aoi()
-    points = sample_points(image)
+    points = sample_points(image, args.event)
     hist = histogram(image, args.mode, geom)
     usable = [p for p in points if p["value"] is not None]
+    labelled = [p for p in usable if p["expected"] is not None]
 
     start, end = config.EVENTS[args.event][args.window]
     print("%s %s  %s..%s   %s" % (args.event, args.window, start, end, label))
     print()
     print("Validation points")
-    print("  %-20s %-10s %9s" % ("point", "expected", label))
+    print("  %-20s %-10s %9s" % ("point", "ground truth", label))
     for point in points:
         shown = "      n/a" if point["value"] is None else "%9.3f" % point["value"]
-        print("  %-20s %-10s %s" % (point["name"], point["expected"], shown))
+        print("  %-20s %-10s %s"
+              % (point["name"], point["expected"] or "-", shown))
     print()
     print("  %d of %d points have data." % (len(usable), len(points)))
     if len(usable) < len(points):
         print("  no observation: %s"
               % ", ".join(p["name"] for p in points if p["value"] is None))
+    if len(labelled) < len(usable):
+        print("  tanpa label untuk event ini (tidak masuk matrix): %s"
+              % ", ".join(p["name"] for p in usable if p["expected"] is None))
 
     # water_fraction() is relative to observed pixels, which is not the AOI when
     # the layer is partly cloud-masked. Scale it so the printed extent is honest.
@@ -218,6 +243,19 @@ def main():
         print("  thr %6.2f  water %5.1f%% (%.0f ha)  TP%d FN%d FP%d TN%d"
               % (threshold, 100 * fraction, fraction * aoi_ha,
                  metrics["tp"], metrics["fn"], metrics["fp"], metrics["tn"]))
+
+    # The matrix says how many; this says which. A single FN caused by a point
+    # sitting 0.008 below the threshold looks identical to a real miss in the
+    # counts, and the two need different responses.
+    chosen = max(winners)
+    print()
+    print("Sel per titik pada ambang %.2f (ujung konservatif plateau)" % chosen)
+    print("  %-20s %-10s %9s  %s" % ("point", "ground truth", label, "sel"))
+    for point in points:
+        shown = "      n/a" if point["value"] is None else "%9.3f" % point["value"]
+        print("  %-20s %-10s %s  %s"
+              % (point["name"], point["expected"] or "-", shown,
+                 cell(point, chosen) or "-"))
 
     reference = otsu(hist)
     if reference is not None:

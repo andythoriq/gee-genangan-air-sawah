@@ -68,18 +68,18 @@ def report_coverage():
             print("     %s  scene cloud %3.0f%%  aoi coverage %3.0f%%" % (stamp, cloud, 100 * cov))
 
 
-def sample_points(mndwi_image):
+def sample_points(mndwi_image, event=None):
     features = [
         ee.Feature(
             ee.Geometry.Point(spec["lonlat"]).buffer(config.VALIDATION_BUFFER_M),
-            {"name": name, "expected": spec["expected"]},
+            {"name": name},
         )
         for name, spec in config.VALIDATION_POINTS.items()
     ]
     sampled = mndwi_image.reduceRegions(
         ee.FeatureCollection(features), ee.Reducer.mean(), 10
     ).getInfo()["features"]
-    print("  %-20s %-10s %8s %10s" % ("point", "expected", "MNDWI", "verdict"))
+    print("  %-20s %-10s %8s %10s" % ("point", "ground truth", "MNDWI", "verdict"))
     for feature in sampled:
         props = feature["properties"]
         value = props.get("mean")
@@ -89,7 +89,8 @@ def sample_points(mndwi_image):
         else:
             verdict = "water" if value > config.PREVIEW_THRESHOLD else "dry"
             shown = "%8.3f" % value
-        print("  %-20s %-10s %s %10s" % (props["name"], props["expected"], shown, verdict))
+        expected = config.label_for(props["name"], event) or "-"
+        print("  %-20s %-10s %s %10s" % (props["name"], expected, shown, verdict))
 
 
 def build_map(event, window):
@@ -108,7 +109,7 @@ def build_map(event, window):
     print("%s %s  %s..%s" % (event, window, start, end))
     print("  scenes: %d   AOI coverage: %.0f%%" % (sentinel.scene_count(start, end).getInfo(), 100 * cov))
     print("  MNDWI mean %.3f  sd %.3f" % (stats["MNDWI_mean"] or 0, stats["MNDWI_stdDev"] or 0))
-    sample_points(mndwi_image)
+    sample_points(mndwi_image, event)
 
     m = geemap.Map()
     m.centerObject(geom, 15)

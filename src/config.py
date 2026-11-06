@@ -94,16 +94,21 @@ BASELINES = {
 
 # Flood events reported by residents. t1 = peak inundation, t2 = recession.
 #
-# Measured AOI coverage with CLOUD_MASK_MODE = "scl" (2026-11-05):
-#   event        t1    t2    nearest usable acquisition
-#   2025-02-17   0%   100%   2025-02-27 (10 days after)
-#   2026-01-24   0%    35%   2026-02-02 (9 days after, partial)
-#   2026-01-29   0%     0%   2026-02-02 (4 days after, partial)
+# Measured AOI coverage with CLOUD_MASK_MODE = "scl" (re-measured 2026-11-06):
+#   event        t1    t2    acquisitions that survive the mask
+#   2025-02-17   0%    99%   2025-02-27 (both overpasses) and 2025-03-01
+#   2026-01-24   0%    54%   2026-02-02 only, and only 54% of the AOI
+#   2026-01-29   0%     0%   nothing - 2026-02-02 falls outside both windows
 #
 # Every t1 window is empty: no clear pixel exists over the AOI on or near any
 # reported flood date. Do not treat these windows as validated - widen them
 # and re-run `python src/preview_event.py --diagnose` before committing to a
 # design.
+#
+# The t2 composite is a median, not a date. For 2025-02-17 it mixes 27 Feb and
+# 1 Mar, so a ground-truth label for it must describe that two-day window, not
+# 27 Feb alone. For 2026-01-24 it is effectively 2 Feb, and the other 46% of
+# the AOI has no observation at all - a point there cannot be scored.
 EVENTS = {
     "2025-02-17": {
         "t1": ("2025-02-15", "2025-02-19"),
@@ -122,14 +127,61 @@ EVENTS = {
     },
 }
 
-# Field validation points. "Safe" is the negative control: it should stay
-# dry in every event, so any water detected there is a false positive.
+# Ground-truth labels for the confusion matrix. Only these two strings are
+# accepted. Anything else ("Inundated", "tergenang", "flooded") would be
+# counted as a negative control without warning, because score() only tests
+# for equality with "inundated"; label_for() raises instead.
+GROUND_TRUTH_LABELS = ("inundated", "safe")
+
+# Field validation points, one entry per plot.
+#
+#   lonlat       [longitude, latitude] WGS84; sampled as a disc of
+#                VALIDATION_BUFFER_M, not a single pixel
+#   expected     condition at the surveyed event: "inundated" or "safe".
+#                "safe" is the negative control - any water detected there is
+#                a false positive.
+#   observed_on  optional "YYYY-MM-DD" the condition was read: the field visit,
+#                or the acquisition date of the high-resolution image used for
+#                visual interpretation. Label the imagery date, not the visit
+#                date, if the two differ.
+#   source       optional short string: "wawancara petani", "citra Planet
+#                2025-02-18", ... The report has to say which of the two it is,
+#                so record it here rather than in your notes.
+#   events       optional {event date: label} override. A value of None means
+#                "not observed in this event": the plot is still sampled and
+#                shown, but it is left out of that event's confusion matrix.
+#                Without this a plot carries the same label into all three
+#                events, which cannot be true for three separate floods.
+#
+# Add a point before you look at the index value at that point. Choosing the
+# location after seeing that the index is high there is label leakage, and it
+# inflates every accuracy figure computed from the matrix.
 VALIDATION_POINTS = {
     "Sawah Kontrak 1": {"lonlat": [107.83064, -6.39555], "expected": "inundated"},
     "Sawah Impres": {"lonlat": [107.80748, -6.39770], "expected": "safe"},
     "Sawah PU & Keprak": {"lonlat": [107.81818, -6.38834], "expected": "inundated"},
     "Sawah Kontrak 2": {"lonlat": [107.82643, -6.39678], "expected": "inundated"},
 }
+
+
+def label_for(name, event=None):
+    """Ground truth for one plot in one event, or None if it was not observed.
+
+    Returns None when the point carries an explicit None override for that
+    event. Callers keep such a point in their tables but must drop it from the
+    confusion matrix - there is no label to score against.
+    """
+    spec = VALIDATION_POINTS[name]
+    overrides = spec.get("events") or {}
+    if event is not None and event in overrides:
+        label = overrides[event]
+    else:
+        label = spec["expected"]
+    if label is not None and label not in GROUND_TRUTH_LABELS:
+        raise ValueError(
+            "titik %r, event %r: label %r tidak dikenal; pakai %s atau None"
+            % (name, event, label, " / ".join(repr(l) for l in GROUND_TRUTH_LABELS)))
+    return label
 
 # Radius around each validation point used when sampling MNDWI, in metres.
 # 30 m spans ~9 pixels of 10 m, which averages out single-pixel noise.

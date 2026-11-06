@@ -64,12 +64,13 @@ def _summary(result, note, saved_at):
         "",
         "## Titik validasi",
         "",
-        "| Titik | Harapan | Nilai |",
+        "| Titik | Ground truth | Nilai |",
         "|---|---|---|",
     ]
     for point in result["points"]:
         shown = "-" if point["value"] is None else "%.3f" % point["value"]
-        lines.append("| %s | %s | %s |" % (point["name"], point["expected"], shown))
+        lines.append("| %s | %s | %s |"
+                     % (point["name"], point["expected"] or "-", shown))
 
     lines += [
         "",
@@ -113,7 +114,7 @@ def save(result, note=""):
         writer = csv.writer(handle)
         writer.writerow(["point", "expected", "value"])
         for point in result["points"]:
-            writer.writerow([point["name"], point["expected"], point["value"]])
+            writer.writerow([point["name"], point["expected"] or "", point["value"]])
 
     with open(os.path.join(folder, "sweep.csv"), "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(result["sweep"][0].keys()))

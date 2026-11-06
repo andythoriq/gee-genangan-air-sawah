@@ -41,8 +41,11 @@ TOOLTIPS = {
     ),
     "titik": (
         "Nilai indeks di setiap sawah validasi. Kolom Prediksi membandingkan nilai itu "
-        "dengan ambang yang sedang dipakai, jadi isinya sama dengan sel-sel confusion "
-        "matrix di tab Kalibrasi."
+        "dengan ambang yang sedang dipakai, dan kolom Sel menyebut kotak confusion "
+        "matrix yang diisi titik itu. Ground truth diambil per event dari "
+        "src/config.py: satu sawah bisa tergenang di Februari 2025 tapi aman di "
+        "Januari 2026, jadi labelnya tidak boleh sama untuk semua event. Titik yang "
+        "tidak diamati pada event terpilih tampil 'belum ada' dan tidak masuk matrix."
     ),
     "peta": (
         "Ikon di kanan atas peta dipakai untuk berpindah antara basemap jalan dan citra "
@@ -122,7 +125,7 @@ def raw_preview(start, end):
 
 
 def compute(event_start, event_end, base_start, base_end, mode, mask_mode,
-            threshold, clean_length, run_label):
+            threshold, clean_length, run_label, event=None):
     import ee
 
     geom = sentinel.aoi()
@@ -148,7 +151,9 @@ def compute(event_start, event_end, base_start, base_end, mode, mask_mode,
     event_coverage = sentinel.coverage(event_composite).getInfo() or 0.0
     base_coverage = (sentinel.coverage(base_composite).getInfo() or 0.0
                      if base_composite is not None else None)
-    points = cal.sample_points(layer)
+    # event=None for a free date range: there is no named event, so each point
+    # falls back to its default label.
+    points = cal.sample_points(layer, event)
     hist = cal.histogram(layer, mode, geom)
     total_ha = area_ha()
 
@@ -198,7 +203,7 @@ def compute(event_start, event_end, base_start, base_end, mode, mask_mode,
         "dimensions": 512, "format": "png"})
 
     return {
-        "label": run_label, "layer_label": layer_label,
+        "label": run_label, "layer_label": layer_label, "event": event,
         "mode": mode, "mask_mode": mask_mode, "threshold": threshold,
         "clean_length": clean_length,
         "observed": observed, "total_ha": total_ha,
@@ -230,6 +235,7 @@ def sidebar():
                                "membebaskan rentang, tapi tidak ada penanda event.")
 
         valid = True
+        event = None
         if source == "Preset":
             event = st.selectbox("Event banjir", sorted(config.EVENTS), index=0)
             window = st.radio("Jendela", ["t2", "t1"], horizontal=True,
@@ -307,7 +313,7 @@ def sidebar():
                 base_start=base_start, base_end=base_end, mode=mode,
                 mask_mode=mask_mode, threshold=threshold,
                 clean_length=clean_length if use_morph else 0,
-                run_label=run_label), run
+                run_label=run_label, event=event), run
 
 
 def render_points(result):
@@ -315,20 +321,27 @@ def render_points(result):
     rows = []
     for point in result["points"]:
         value = point["value"]
+        which = cal.cell(point, result["threshold"])
         if value is None:
             predicted = "tidak ada data"
+        elif which is None:
+            predicted = "tanpa label"
         elif value > result["threshold"]:
             predicted = "air"
         else:
             predicted = "kering"
         rows.append({
             "Titik": point["name"],
-            "Harapan": point["expected"],
+            "Ground truth": point["expected"] or "belum ada",
             result["layer_label"]: None if value is None else round(value, 3),
             "Prediksi": predicted,
+            "Sel": which or "-",
             "Di AOI": "ya" if point.get("inside_aoi") else "tidak",
         })
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    st.caption("Sel = kotak confusion matrix yang diisi titik ini pada ambang %.2f. "
+               "Titik berlabel 'belum ada' tetap diukur tapi tidak masuk matrix."
+               % result["threshold"])
 
 def render_status(result):
     columns = st.columns(4)

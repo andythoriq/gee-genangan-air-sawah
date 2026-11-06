@@ -57,12 +57,12 @@ def area_ha(mask, geom):
     return None if square_metres is None else square_metres / 10000.0
 
 
-def sample_points(layers, geom):
+def sample_points(layers, geom, event=None):
     """Sample every layer at the validation points and print a comparison."""
     features = [
         ee.Feature(
             ee.Geometry.Point(spec["lonlat"]).buffer(config.VALIDATION_BUFFER_M),
-            {"name": name, "expected": spec["expected"]},
+            {"name": name},
         )
         for name, spec in config.VALIDATION_POINTS.items()
     ]
@@ -72,10 +72,10 @@ def sample_points(layers, geom):
         for label, image in layers.items()
     }
     print("  %-20s %-10s %9s %9s %8s  %s"
-          % ("point", "expected", "baseline", "event", "delta", "reading"))
+          % ("point", "ground truth", "baseline", "event", "delta", "reading"))
     for i, feature in enumerate(features):
         name = feature.get("name").getInfo()
-        expected = feature.get("expected").getInfo()
+        expected = config.label_for(name, event) or "-"
         row = {label: values[label][i]["properties"].get("mean") for label in layers}
         base, event = row["baseline"], row["event"]
         if base is None or event is None:
@@ -116,7 +116,7 @@ def run(event, window, baseline_name, threshold):
              area_ha(new_water, geom) or 0.0,
              area_ha(receded, geom) or 0.0,
              area_ha(ee.Image.constant(1), geom) or 0.0))
-    sample_points({"baseline": base_mndwi, "event": event_mndwi}, geom)
+    sample_points({"baseline": base_mndwi, "event": event_mndwi}, geom, event)
 
     m = geemap.Map()
     m.centerObject(geom, 15)
